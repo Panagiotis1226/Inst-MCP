@@ -1,0 +1,16 @@
+{
+  "name": "inst-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MCP server for the official Instagram Platform API",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "setup-token": "node scripts/setup-token.mjs",
+    "probe": "node scripts/probe.mjs",
+    "probe:write": "node scripts/probe.mjs --write"
+  }
+}

@@ -8,6 +8,7 @@ search, business discovery, collaboration, shopping, creator marketplace and web
 >
 > - [`docs/PLAN.md`](docs/PLAN.md): architecture, auth, tool design, packaging and the phased roadmap
 > - [`docs/ENDPOINTS.md`](docs/ENDPOINTS.md): every Instagram API endpoint with a one-line description and the MCP tool planned for it
+> - [`docs/SETUP.md`](docs/SETUP.md): create your Meta app and token (no business needed), then run the capability probe
 
 ## Planned install options
 
@@ -19,4 +20,4 @@ search, business discovery, collaboration, shopping, creator marketplace and web
 | Docker | `docker run -i --rm -e IG_ACCESS_TOKEN=... ghcr.io/panagiotis1226/inst-mcp` |
 
 Requires an Instagram **Business or Creator** account linked to a Facebook Page, plus your own free
-Meta developer app. A setup guide is planned at `docs/SETUP.md`. No Meta App Review is needed.
+Meta developer app. See [`docs/SETUP.md`](docs/SETUP.md). No Meta App Review is needed.

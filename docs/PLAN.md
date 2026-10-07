@@ -76,7 +76,18 @@ accounts are not put at risk.
    - Bot disclosure is required in some jurisdictions.
 
    Tools enforce or document these rules so Claude does not violate them.
-8. **Doc inconsistencies found during research.** These are resolved by the Phase 0 probe; see §15.
+8. **No registered business (personal developer).** Decided 2026-10-07: the app stays in
+   Development mode with no business portfolio. App-role users get every permission and feature.
+   Ruled out:
+   - webhooks (they need a published, business-verified app; `ig_activity_check` polling replaces them);
+   - shopping and product tagging;
+   - Creator Marketplace;
+   - upcoming events;
+   - partnership labels.
+
+   Hashtag search is uncertain until the probe runs. Toolsets that cannot work are disabled by
+   default but stay in the code, so a future business setup only needs config.
+9. **Doc inconsistencies found during research.** These are resolved by the Phase 0 probe; see §15.
    - Publishing cap: 50 vs 100 per 24h.
    - Collaborator limit: 3 vs 5.
    - Product-tag limit: 5 vs 20.
@@ -143,7 +154,8 @@ granted scopes, the linked IG account and the publishing quota.
 | Variable | Default | Purpose |
 |---|---|---|
 | `IG_AUTH_MODE` | `facebook` | `facebook` (FB Login, full feature set) or `instagram` (IG Login, no Page needed) |
-| `IG_ACCESS_TOKEN` | — | Long-lived IG User token (IG mode), or a Page / System-User token (FB mode) |
+| `IG_ACCESS_TOKEN` | — | IG mode: the long-lived Instagram User token |
+| `IG_USER_TOKEN` / `IG_PAGE_TOKEN` | — | FB mode: the ~60-day user token and the non-expiring Page token (written by `npm run setup-token`). If the probe shows the Page token is sufficient, the user token becomes optional |
 | `IG_USER_ID` | auto via `/me` or `/me/accounts` | Instagram professional account ID |
 | `IG_PAGE_ID` | auto (FB mode) | Page used for messaging and handover |
 | `IG_APP_ID` / `IG_APP_SECRET` | — | Only needed for `auth login` and token exchange (never for normal calls) |
@@ -429,7 +441,8 @@ inst-mcp/
 │  ├─ http/                 # Streamable HTTP transport + OAuth AS (Phase 7)
 │  └─ webhook/              # receiver, signature check, event store
 ├─ scripts/
-│  ├─ probe.ts              # Phase 0 capability probe → capability-matrix.json
+│  ├─ probe.mjs             # Phase 0 capability probe → probe-results/capability-matrix-<mode>.{json,md}
+│  ├─ setup-token.mjs       # Explorer token → long-lived user + Page token → .env
 │  └─ gen-docs.ts           # generates docs/TOOLS.md from tool definitions
 ├─ test/  unit/  fixtures/  live/  evals/
 └─ docs/  PLAN.md  ENDPOINTS.md  SETUP.md  TOOLS.md (generated)  PRIVACY.md
@@ -444,7 +457,7 @@ code, so ~95 tools stay maintainable, and `gen-docs.ts` keeps TOOLS.md in sync a
 
 1. **Unit tests** for every tool, run against MSW with recorded Graph responses. They cover the happy path, pagination, each mapped error subcode, mode gating and `dry_run`.
 2. **Contract tests.** Every tool's zod output schema is validated against fixtures. When Meta changes a response shape, a test fails and nothing breaks silently.
-3. **Capability probe** (`scripts/probe.ts`). Run it against a real test account in each mode. It calls every read endpoint and safe write endpoint (comment on own post → delete, hide → unhide, ice breakers set → delete, container create without publish) and emits `capability-matrix.json`. It is re-run before each release and whenever `IG_API_VERSION` is bumped.
+3. **Capability probe** (`scripts/probe.mjs`, dependency-free). Run it against a real test account in each mode. It calls every read endpoint and safe write endpoint (comment on own post → delete, hide → unhide, ice breakers set → delete, container create without publish) and emits `capability-matrix.json`. It is re-run before each release and whenever `IG_API_VERSION` is bumped.
 4. **MCP Inspector** (`npx @modelcontextprotocol/inspector node dist/index.js`) for manual checks.
 5. **LLM evals.** About 15 realistic tasks (e.g. "which of my last 10 reels had the best average watch time?", "hide all comments containing a URL on my latest post") run through Claude with the server attached. Score correctness and the number of tool calls. This catches bad tool descriptions.
 6. **CI (GitHub Actions)**
@@ -481,7 +494,7 @@ Each phase ends with a tagged, installable release, so the package is usable fro
 
 | Phase | Deliverables | Exit criteria |
 |---|---|---|
-| **0. Meta setup + probe** (S) | Two Meta apps (IG Login and FB Login), a test Business account linked to a Page, `scripts/probe.ts` skeleton, `docs/SETUP.md` | All "FB (IG?)" rows, the publishing cap, collaborator and tag limits, v25 vs v26, and localhost redirect support are resolved and recorded |
+| **0. Meta setup + probe** (S) | ✅ `docs/SETUP.md`, `scripts/setup-token.mjs`, `scripts/probe.mjs` written. ⏳ You: create the app and run the probe (FB Login; Creator account linked to a Page) | All "FB (IG?)" rows, the publishing cap, collaborator and tag limits, v25 vs v26, and localhost redirect support are resolved and recorded |
 | **1. Skeleton + read-only core** (M) | Repo scaffolding, config, Graph client (errors, retries, BUC, pagination), token refresh, `doctor`, toolsets **account, media, insights** (read), resources, CI, npm `0.1.0`, first `.mcpb` | `npx -y inst-mcp` works in Claude Desktop and Claude Code; tests green |
 | **2. Publishing + community** (L) | **publish** (all 4 high-level tools + primitives, resumable video upload, validation), **comments**, **mentions**, likes, media delete, `ig_activity_check` | Publishes an image, carousel, reel, trial reel and story from public URLs, and a reel from a local video file; moderates comments end to end |
 | **3. Messaging** (L) | **messaging**, **inbox_config**, **routing**; HUMAN_AGENT; attachment upload | Read and reply to DMs, set ice breakers and menu, hand over threads |
@@ -504,6 +517,7 @@ Sizes: S ≈ a few days, M ≈ 1–2 weeks, L ≈ 2–3 weeks of focused work. T
 | Local photos can't be published in v1 | Feature gap | Decided: post photos manually or from public URLs; optional storage adapter later (§8) |
 | Meta deprecations (e.g. insights metrics churn every few months) | Tools break | Contract tests, probe on every version bump, `ig_graph_request` as escape hatch, changelog watch |
 | Webhooks need a Live app + Business Verification even under Model A | Real-time events unavailable at first | `ig_activity_check` polling fallback; verify your business when ready for Phase 6 |
+| No registered business | Webhooks, shopping, creator marketplace, events and partnership labels unavailable | Accepted for personal use. Those toolsets are off by default; polling covers real-time needs |
 | Large tool count | Context bloat in some clients | Toolsets, read-only mode, concise descriptions |
 | MCP spec churn (2026-07-28 went stateless) | Transport breakage | Rely on the SDK; pin and bump deliberately; the stateless design already suits Model C |
 

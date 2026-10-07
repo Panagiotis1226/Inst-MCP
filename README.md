@@ -17,7 +17,6 @@ search, business discovery, collaboration, shopping, creator marketplace and web
 | Claude Desktop | Double-click `inst-mcp.mcpb` from Releases |
 | Claude Code | `claude mcp add instagram -e IG_ACCESS_TOKEN=... -- npx -y inst-mcp`, or install it as a plugin |
 | Docker | `docker run -i --rm -e IG_ACCESS_TOKEN=... ghcr.io/panagiotis1226/inst-mcp` |
-| claude.ai (web/mobile) | Hosted connector URL (later phase) |
 
-Requires an Instagram **Business or Creator** account. The full feature set needs that account to be
-linked to a Facebook Page (Facebook Login mode).
+Requires an Instagram **Business or Creator** account linked to a Facebook Page, plus your own free
+Meta developer app. A setup guide is planned at `docs/SETUP.md`. No Meta App Review is needed.

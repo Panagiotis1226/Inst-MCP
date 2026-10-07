@@ -18,7 +18,8 @@ This document covers how to build, package and ship it.
 | Login modes | Both **Instagram Login** and **Facebook Login**, chosen per install (`IG_AUTH_MODE`) | A Meta app can use only one. IG Login is simpler (no FB Page). FB Login unlocks the full feature set |
 | Tool surface | About 95 tools grouped into **toolsets**, a sensible default set, plus a raw `ig_graph_request` escape hatch | Every endpoint is covered without flooding the model's context |
 | Writes | High-level "do the whole thing" tools (e.g. `ig_publish_reel`) **plus** low-level primitives | LLMs work best with one-call tasks; power users still get full control |
-| Distribution | npm (`npx -y inst-mcp`), `.mcpb` bundle, Claude Code plugin marketplace, Docker image, MCP Registry entry; later a hosted remote connector | Covers every Claude surface and every other MCP client |
+| Media | Publish from **public URLs** (plus local **video** via Meta's direct upload). **No object storage in v1** | Local-photo publishing is deferred to a later optional adapter (§8) |
+| Distribution | npm (`npx -y inst-mcp`), `.mcpb` bundle, Claude Code plugin marketplace, Docker image, MCP Registry entry. **Model A**: each installer uses their own Meta app (§7.2) | Covers every Claude surface and every other MCP client, with no Meta App Review |
 | Package name | `inst-mcp` (free on npm as of 2026-10-07) | Matches the repo |
 
 > **Most important constraint.** "Every endpoint" requires **Facebook Login mode**: the Instagram
@@ -99,8 +100,8 @@ accounts are not put at risk.
 │  └──────────────┘   └────────────────────┘   └──────────────────────┘   │ • BUC rate-limit tracking   │  │
 │                                                                          │ • error → actionable hints  │  │
 │  ┌──────────────┐   ┌────────────────────┐   ┌──────────────────────┐   │ • pagination helpers        │  │
-│  │ Token store   │◀─▶│ Auth (IG / FB      │   │ Media host adapter    │   └──────────────┬──────────────┘  │
-│  │ (file 0600 /  │   │ OAuth, refresh)    │   │ (url | s3-compatible) │                  │                 │
+│  │ Token store   │◀─▶│ Auth (IG / FB      │   │ Media validator       │   └──────────────┬──────────────┘  │
+│  │ (file 0600 /  │   │ OAuth, refresh)    │   │ (storage: later)      │                  │                 │
 │  │  encrypted DB)│   └────────────────────┘   └──────────────────────┘                  │                 │
 │  └──────────────┘                                                                        │                 │
 │  ┌──────────────────────────────┐                                                        │                 │
@@ -127,7 +128,7 @@ One codebase serves both deployment shapes. `inst-mcp` with no arguments runs st
 | Lint/format | Biome | One tool, fast |
 | Tests | Vitest + MSW (mocked Graph API from recorded fixtures) | Plus gated live smoke tests |
 | Image checks | `image-size` (pure JS) for validating type, size and aspect ratio | **No native deps** (e.g. `sharp`), which keeps the `.mcpb` cross-platform. Optional JPEG conversion via pure-JS `jimp`, behind a flag |
-| S3 upload | Hand-rolled SigV4 presigned PUT (~80 LOC), or `aws4fetch` | Avoids the large AWS SDK |
+| Object storage | **Not in v1.** A future adapter would use a hand-rolled SigV4 presigned PUT or `aws4fetch` | Avoids the large AWS SDK when it is added |
 | Logging | stderr only (stdout is the MCP channel); `IG_LOG_LEVEL` | Never log tokens |
 
 ---
@@ -149,8 +150,6 @@ granted scopes, the linked IG account and the publishing quota.
 | `IG_API_VERSION` | `v25.0` (bumped per release after a probe run) | Graph API version |
 | `IG_TOOLSETS` | `account,media,publish,comments,mentions,insights,messaging` | Comma list, or `all` |
 | `IG_READ_ONLY` | `false` | Registers only read tools |
-| `IG_MEDIA_HOST` | `url` | `url` (public URLs only) or `s3` |
-| `IG_S3_ENDPOINT` / `IG_S3_BUCKET` / `IG_S3_KEY` / `IG_S3_SECRET` / `IG_S3_PUBLIC_BASE_URL` | — | Any S3-compatible store: AWS, Cloudflare R2, Backblaze B2, MinIO |
 | `IG_EVENTS_FILE` | `~/.config/inst-mcp/events.jsonl` | Where the webhook receiver writes events |
 | `IG_STATE_DIR` | `~/.config/inst-mcp/` | Refreshed tokens (`0600`), cached IDs |
 
@@ -168,7 +167,7 @@ granted scopes, the linked IG account and the publishing quota.
   - Lists return `{items, next_cursor}`, and every list tool accepts `cursor` and `limit`.
   - Responses include both a short text summary and `structuredContent`.
 - **Actionable errors.** Meta `code`/`error_subcode` pairs (ENDPOINTS.md §17, PLAN §13) map to plain-English fixes.
-  - Example: `9004/2207052`: "Media URL isn't publicly reachable — configure IG_MEDIA_HOST=s3 or pass a public URL."
+  - Example: `9004/2207052`: "Meta couldn't download the media URL — use a public, direct link (not localhost, a private Drive link or a login-protected page)."
   - Error responses use `isError: true`.
 - **Rate-limit awareness.**
   - The client parses `X-Business-Use-Case-Usage` / `X-App-Usage`.
@@ -198,7 +197,7 @@ granted scopes, the linked IG account and the publishing quota.
 | **events** (FB) | `ig_events_list`, `ig_event_create` Ⓦ, `ig_event_update` Ⓦ |
 | **creators** (FB) | `ig_creators_search`, `ig_creator_get`, `ig_creators_brand_audiences` |
 | **threads** (FB) | `ig_threads_get_user`, `ig_threads_create_backed_user` Ⓦ, `ig_list_ad_partners` |
-| **webhooks** | `ig_webhooks_subscribe` Ⓦ, `ig_webhooks_status`, `ig_events_list`, `ig_events_ack` |
+| **webhooks** | `ig_activity_check` (polling; no webhook setup needed), `ig_webhooks_subscribe` Ⓦ, `ig_webhooks_status`, `ig_events_list`, `ig_events_ack` |
 | **raw** | `ig_graph_request`: any method/path on the configured host. GET only when `IG_READ_ONLY`; otherwise marked destructive. Covers new or unmodelled endpoints on day one |
 
 That is about 95 tools in total, and the default set is about 45. In Claude Code, tool search
@@ -250,11 +249,17 @@ User tokens (60 days, no programmatic refresh) are supported, but `doctor` warns
 
 | Model | How it works | Meta review needed? | User effort | When |
 |---|---|---|---|---|
-| **A. Bring-your-own app** (default) | Each installer creates their own Meta app (about 10 min, guided by `docs/SETUP.md`), adds their IG account as a tester, generates a token, and installs the package | **No** (Standard Access) | Medium, one-time | v1. Works today for you and anyone technical |
+| **A. Bring-your-own app** ✅ **chosen** | Each installer creates their own Meta app (about 10 min, guided by `docs/SETUP.md`), adds their IG account as a tester, generates a token, and installs the package | **No** (Standard Access) | Medium, one-time | v1. Works today for you and anyone technical |
 | **B. Shared app, local server** | You publish one Meta app ID; `auth login` uses it; secrets are kept out of the bundle by using a token-exchange endpoint you host (the secret never ships) | **Yes**: App Review + Business Verification for every permission used | Low | After v1 if non-technical users matter |
-| **C. Hosted remote connector** | `inst-mcp serve --http` runs on Cloudflare Workers or Fly.io. Users paste one URL into **claude.ai → Settings → Connectors → Add custom connector**, sign in with Instagram or Facebook, and it works on web, desktop and mobile | **Yes** (same as B), plus a privacy policy, data-deletion callback and hosted infrastructure | Lowest | Phase 7 |
+| **C. Hosted remote connector** | `inst-mcp serve --http` runs on Cloudflare Workers or Fly.io. Users paste one URL into **claude.ai → Settings → Connectors → Add custom connector**, sign in with Instagram or Facebook, and it works on web, desktop and mobile | **Yes** (same as B), plus a privacy policy, data-deletion callback and hosted infrastructure | Lowest | Not planned (optional Phase 7) |
 
-Model C details:
+**Model A in practice (decided)**
+- **Your own use, plus people you can name:** one Meta app (yours). Add teammates or managed accounts as app roles (Admin, Developer or Tester). They log in through your app, and no review is needed.
+- **Anyone else who installs the package:** they follow `docs/SETUP.md` and create their own Meta app (a Business-type app with Facebook Login for Business plus the Instagram product). Then they generate a token and paste it into the install.
+- The package never contains an app ID or secret; each install brings its own token.
+- `docs/SETUP.md` is a first-class deliverable: screenshots for app creation, linking the IG account to a Page, generating a non-expiring Page or System-User token, and running `inst-mcp doctor`.
+
+Model C details (kept for reference only; not planned):
 - It implements MCP authorization (OAuth 2.1 + PKCE).
 - Client registration supports both Client ID Metadata Documents (preferred in the 2026-07-28 spec) and Dynamic Client Registration (still used by many clients).
 - Meta Login is the upstream identity provider.
@@ -263,23 +268,40 @@ Model C details:
 
 ---
 
-## 8. Media handling (local files to Instagram)
+## 8. Media handling (decided: no storage in v1)
 
-`ig_publish_*` tools accept either `url` or `file_path`. The pipeline:
+Instagram has no photo-upload endpoint. For images, Meta **downloads the file from a URL you give it**.
+v1 therefore ships the full publishing feature set, but media must already be online. The only
+exception is video, which Meta accepts as direct bytes.
 
-1. **Validate** with pure JS, so the user gets a clear error before burning any quota.
-   - Image: JPEG, ≤ 8MB, aspect 4:5–1.91:1.
+| Input | v1 behaviour |
+|---|---|
+| Image / carousel image / story image | `url` (public, direct link) **only** |
+| Reel / story video / carousel video | `url`, **or** `file_path`, uploaded directly via the resumable upload API (no storage needed). FB mode is documented; IG mode is confirmed in Phase 0 |
+| Local image `file_path` | Rejected with a clear message: "host it publicly or use the Instagram app". The future storage adapter slots in here |
+
+Pipeline in `ig_publish_*`:
+1. **Validate**: pure JS, so you get a clear error before any quota is spent.
+   - Image: JPEG, ≤ 8MB, aspect 4:5–1.91:1. Checked via a ranged GET.
    - Reel: MP4/MOV, ≤ 300MB.
    - Story video: ≤ 100MB.
    - Caption: ≤ 2200 chars, ≤ 30 hashtags, ≤ 20 @mentions.
    - Carousel: 2–10 items.
 2. **Deliver**
-   - `url`: passed through; the server only checks with a HEAD request that it is public.
-   - Video + `file_path`: resumable upload to `rupload.facebook.com` (`offset`, `file_size`, `Authorization: OAuth`). Uploads resume from `bytes_transferred` on failure. FB mode is documented; IG mode is checked in Phase 0.
-   - Image + `file_path`: needs `IG_MEDIA_HOST=s3`. Upload with a presigned PUT to a random key, hand Meta the public URL, and delete the object after the container is `FINISHED` or `EXPIRED`.
-   - No host configured: fail with setup instructions. The server does **not** silently open tunnels; that is a security risk.
-3. **Poll** the container until `FINISHED`, with exponential backoff (2s→30s, max about 5 min for images and 15 min for video). Surface `ERROR` subcodes in plain English.
+   - `url`: passed through.
+   - Video `file_path`: resumable upload to `rupload.facebook.com`. It sends the `offset`, `file_size` and `Authorization: OAuth` headers, and resumes from `bytes_transferred` if interrupted.
+3. **Poll** the container until `FINISHED`. Backoff runs from 2s to 30s, up to about 5 min for images and 15 min for video. `ERROR` subcodes are shown in plain English.
 4. **Publish**, then return `{media_id, permalink, quota_remaining}`.
+
+Publishing still gives you more than the Instagram app offers. Examples:
+- "post this product photo from our site with this caption at 9am" (scheduling done by the client)
+- trial reels
+- collaborators and product tags
+- alt text
+
+You can also keep posting manually in the app and use the server for everything else.
+
+**Later (optional):** an `IG_MEDIA_HOST=s3` adapter for local photos, using any S3-compatible bucket such as Cloudflare R2. It uploads the photo, hands Meta a temporary URL, and deletes the object after publishing. No other code changes are needed.
 
 ---
 
@@ -301,6 +323,10 @@ npx inst-mcp webhook serve --port 8787 --verify-token <random>
 
   This enables flows like "check new comments and DMs and draft replies".
 - In hosted mode (Model C), the receiver is built in and events are per-user.
+
+**Model A caveat.** Meta only delivers webhooks to apps that are **Live** and have completed **Business Verification**. Comment webhooks also need Advanced Access. For your own business that is achievable: it is verification, not a public App Review. Until then, v1 ships a **polling fallback**:
+- `ig_activity_check(since)` fetches new comments on recent media plus updated DM conversations since the last check.
+- It stores a cursor in `IG_STATE_DIR`, so "what's new since this morning?" works with no webhook setup at all.
 
 ---
 
@@ -396,7 +422,7 @@ inst-mcp/
 │  │  ├─ rate-limit.ts      # token buckets + persisted hashtag budget
 │  │  └─ rupload.ts         # resumable upload
 │  ├─ auth/                 # tokens.ts (load/refresh/persist), oauth-instagram.ts, oauth-facebook.ts
-│  ├─ media/                # validate.ts, host-url.ts, host-s3.ts
+│  ├─ media/                # validate.ts (storage adapter added later)
 │  ├─ tools/                # one file per toolset (account.ts, media.ts, publish.ts, …, raw.ts)
 │  │  └─ define.ts          # defineTool({name, modes, scopes, annotations, input, output, handler})
 │  ├─ resources/  prompts/
@@ -457,12 +483,12 @@ Each phase ends with a tagged, installable release, so the package is usable fro
 |---|---|---|
 | **0. Meta setup + probe** (S) | Two Meta apps (IG Login and FB Login), a test Business account linked to a Page, `scripts/probe.ts` skeleton, `docs/SETUP.md` | All "FB (IG?)" rows, the publishing cap, collaborator and tag limits, v25 vs v26, and localhost redirect support are resolved and recorded |
 | **1. Skeleton + read-only core** (M) | Repo scaffolding, config, Graph client (errors, retries, BUC, pagination), token refresh, `doctor`, toolsets **account, media, insights** (read), resources, CI, npm `0.1.0`, first `.mcpb` | `npx -y inst-mcp` works in Claude Desktop and Claude Code; tests green |
-| **2. Publishing + community** (L) | **publish** (all 4 high-level tools + primitives, resumable upload, S3 media host, validation), **comments**, **mentions**, likes, media delete | Publishes an image, carousel, reel, trial reel and story from local files; moderates comments end to end |
+| **2. Publishing + community** (L) | **publish** (all 4 high-level tools + primitives, resumable video upload, validation), **comments**, **mentions**, likes, media delete, `ig_activity_check` | Publishes an image, carousel, reel, trial reel and story from public URLs, and a reel from a local video file; moderates comments end to end |
 | **3. Messaging** (L) | **messaging**, **inbox_config**, **routing**; HUMAN_AGENT; attachment upload | Read and reply to DMs, set ice breakers and menu, hand over threads |
 | **4. FB-only extensions** (M) | **hashtags, discovery, collaboration, shopping, events, creators, threads, audio**, `ig_oembed`, `ig_graph_request` | Every row in ENDPOINTS.md has a tool, or is explicitly marked out of scope |
 | **5. Distribution polish** (S) | Claude Code plugin marketplace + skills, Docker image, MCP Registry entry, generated TOOLS.md, README with install buttons and screenshots, evals | A fresh machine installs via each channel in under 5 min following the README |
-| **6. Real-time** (M) | Webhook receiver, `ig_events_*`, `ig_webhooks_*`, `instagram://events/recent`, prompts | New comment or DM shows up in `ig_events_list` within seconds |
-| **7. Hosted connector** (L) | `serve --http`, OAuth 2.1 AS (CIMD + DCR) federated to Meta Login, encrypted token vault, multi-tenant webhooks, privacy policy and data deletion, **Meta App Review + Business Verification** | A stranger adds the URL in claude.ai and uses it on web and mobile |
+| **6. Real-time** (M, needs a Live app + Business Verification) | Webhook receiver, `ig_events_*`, `ig_webhooks_*`, `instagram://events/recent`, prompts | New comment or DM shows up in `ig_events_list` within seconds |
+| **7. Hosted connector** (L, *optional, not planned*) | `serve --http`, OAuth 2.1 AS (CIMD + DCR) federated to Meta Login, encrypted token vault, multi-tenant webhooks, privacy policy and data deletion, **Meta App Review + Business Verification** | A stranger adds the URL in claude.ai and uses it on web and mobile |
 
 Sizes: S ≈ a few days, M ≈ 1–2 weeks, L ≈ 2–3 weeks of focused work. These are rough estimates, not commitments. Meta App Review turnaround is outside our control.
 
@@ -475,17 +501,17 @@ Sizes: S ≈ a few days, M ≈ 1–2 weeks, L ≈ 2–3 weeks of focused work. T
 | Docs contradict each other on caps (50 vs 100 posts, 3 vs 5 collaborators, 5 vs 20 product tags) | Wrong validation | Validate against the runtime value (`content_publishing_limit`); otherwise let Meta reject and map the error. The probe records the truth |
 | Several endpoints documented only for FB Login | IG-mode users see fewer tools | The probe decides; mode gating hides what doesn't work |
 | Instagram Login may not accept localhost redirects | `auth login` friction in IG mode | Dashboard "Generate token" fallback, documented |
-| Local image publishing needs public hosting | Setup friction | S3-compatible adapter (R2 has a free tier); clear error otherwise |
+| Local photos can't be published in v1 | Feature gap | Decided: post photos manually or from public URLs; optional storage adapter later (§8) |
 | Meta deprecations (e.g. insights metrics churn every few months) | Tools break | Contract tests, probe on every version bump, `ig_graph_request` as escape hatch, changelog watch |
-| App Review for Models B and C | Weeks of delay, possible rejection | Ship Model A first; prepare screencasts per permission early |
+| Webhooks need a Live app + Business Verification even under Model A | Real-time events unavailable at first | `ig_activity_check` polling fallback; verify your business when ready for Phase 6 |
 | Large tool count | Context bloat in some clients | Toolsets, read-only mode, concise descriptions |
 | MCP spec churn (2026-07-28 went stateless) | Transport breakage | Rely on the SDK; pin and bump deliberately; the stateless design already suits Model C |
 
 **Decisions**
 1. ✅ Default login mode: **Facebook Login**. IG Login stays supported as a secondary mode.
 2. ✅ License: **MIT**.
-3. ⏳ Distribution model (A / B / C, §7.2): pending.
-4. ⏳ Object storage for local-image publishing: pending. Only needed for photos that aren't already at a public URL (§8).
+3. ✅ Distribution: **Model A**, bring-your-own Meta app; teammates are added as app testers (§7.2). No App Review.
+4. ✅ No object storage in v1. Publishing works from public URLs and local video; the storage adapter is a later option (§8).
 
 ---
 

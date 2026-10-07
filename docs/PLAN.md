@@ -141,7 +141,7 @@ granted scopes, the linked IG account and the publishing quota.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `IG_AUTH_MODE` | `instagram` | `instagram` (IG Login) or `facebook` (FB Login) |
+| `IG_AUTH_MODE` | `facebook` | `facebook` (FB Login, full feature set) or `instagram` (IG Login, no Page needed) |
 | `IG_ACCESS_TOKEN` | — | Long-lived IG User token (IG mode), or a Page / System-User token (FB mode) |
 | `IG_USER_ID` | auto via `/me` or `/me/accounts` | Instagram professional account ID |
 | `IG_PAGE_ID` | auto (FB mode) | Page used for messaging and handover |
@@ -321,7 +321,7 @@ All artifacts come from one build. A tag push (`v*`) triggers the release workfl
 
 ```bash
 # Claude Code
-claude mcp add instagram -e IG_AUTH_MODE=instagram -e IG_ACCESS_TOKEN=IGAA... -- npx -y inst-mcp
+claude mcp add instagram -e IG_AUTH_MODE=facebook -e IG_ACCESS_TOKEN=EAA... -- npx -y inst-mcp
 ```
 
 ```jsonc
@@ -331,7 +331,7 @@ claude mcp add instagram -e IG_AUTH_MODE=instagram -e IG_ACCESS_TOKEN=IGAA... --
     "instagram": {
       "command": "npx",
       "args": ["-y", "inst-mcp"],
-      "env": { "IG_AUTH_MODE": "instagram", "IG_ACCESS_TOKEN": "IGAA..." }
+      "env": { "IG_AUTH_MODE": "facebook", "IG_ACCESS_TOKEN": "EAA..." }
     }
   }
 }
@@ -362,7 +362,7 @@ claude mcp add instagram -e IG_AUTH_MODE=instagram -e IG_ACCESS_TOKEN=IGAA... --
     }
   },
   "user_config": {
-    "auth_mode":    { "type": "string",  "title": "Login type (instagram|facebook)", "default": "instagram", "required": true },
+    "auth_mode":    { "type": "string",  "title": "Login type (facebook|instagram)", "default": "facebook", "required": true },
     "access_token": { "type": "string",  "title": "Access token", "sensitive": true, "required": true },
     "toolsets":     { "type": "string",  "title": "Toolsets", "default": "account,media,publish,comments,mentions,insights,messaging" },
     "read_only":    { "type": "boolean", "title": "Read-only mode", "default": false }
@@ -445,7 +445,7 @@ code, so ~95 tools stay maintainable, and `gen-docs.ts` keeps TOOLS.md in sync a
   - `ig_graph_request` is restricted to the two Graph hosts, so it cannot become an SSRF proxy.
 - **Prompt-injection hygiene.** Comment text, DM text and captions are third-party content. They are returned inside clearly delimited fields, and tool descriptions say so, so the model treats them as data, not instructions.
 - **Meta policy:** DM 24h/7d rules are enforced in `ig_dm_send` where detectable, the bot-disclosure note is in docs, the data-deletion callback is implemented for Model C, and there is a privacy policy in `docs/PRIVACY.md`.
-- **License:** MIT is recommended (most permissive, standard for MCP servers).
+- **License:** MIT (decided; see `LICENSE`).
 
 ---
 
@@ -481,11 +481,11 @@ Sizes: S ≈ a few days, M ≈ 1–2 weeks, L ≈ 2–3 weeks of focused work. T
 | Large tool count | Context bloat in some clients | Toolsets, read-only mode, concise descriptions |
 | MCP spec churn (2026-07-28 went stateless) | Transport breakage | Rely on the SDK; pin and bump deliberately; the stateless design already suits Model C |
 
-**Decisions needed from you before Phase 1:**
-1. Default login mode. **Recommendation: FB Login for your own setup, because it is the only way to get every endpoint.** IG Login stays supported for users without a Facebook Page.
-2. License: MIT recommended.
-3. Is Model C (hosted, App Review) a real goal, or is BYO-app (Model A) enough?
-4. Object storage for local-image publishing: Cloudflare R2 is recommended (S3-compatible, no egress fees).
+**Decisions**
+1. ✅ Default login mode: **Facebook Login**. IG Login stays supported as a secondary mode.
+2. ✅ License: **MIT**.
+3. ⏳ Distribution model (A / B / C, §7.2): pending.
+4. ⏳ Object storage for local-image publishing: pending. Only needed for photos that aren't already at a public URL (§8).
 
 ---
 
